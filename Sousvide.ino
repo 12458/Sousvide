@@ -14,18 +14,19 @@
 #include <LiquidCrystal_I2C.h>
 #include <Encoder.h>
 #include <Bounce2.h>
+#include <EEPROM.h>
 
 // Constant Definitions
-const byte MAXDO = 7;
-const byte MAXCS = 8;
-const byte MAXCLK = 9;
-const byte BUTTON_PIN = 5;
-const byte RELAY_PIN = 10;
+const byte MAXDO = 8;
+const byte MAXCS = 7;
+const byte MAXCLK = 6;
+const byte BUTTON_PIN = 11;
+const byte RELAY_PIN = 12;
 const byte PULSEWIDTH = 5000;
 
 //vars
-double Kp = 0.12;
-double Ki = 0.0003;
+double Kp = 0; // 0.12
+double Ki = 0; //0.0003
 double Kd = 0;
 double temperature;
 double setTemp;
@@ -63,7 +64,14 @@ void updateTemperature()
 
 //SETUP
 void setup()
-{
+{ /*
+  EEPROM.put(10, Kp);
+  EEPROM.put(20, Ki);
+  EEPROM.put(30, Kd);
+  */
+  EEPROM.get(10, Kp);
+  EEPROM.get(20, Ki);
+  EEPROM.get(30, Kd);
   setTemp = 32;
   lcd.init(); // initialize the lcd
   lcd.backlight();
@@ -86,9 +94,12 @@ void loop()
 {
   if (temperature >= 90)
   {
-    powerOn = false;
     error = true;
     lcdWrite();
+  }
+  if (error)
+  {
+    powerOn = false;
   }
   newPosition = myEnc.read() / 4;
   change = newPosition - oldPosition;
@@ -109,6 +120,7 @@ void loop()
   }
   if (submenu == 0)
   {
+    //Serial.println("Submenu0");
     if (selection)
     {
       //Serial.println(change);
@@ -137,13 +149,18 @@ void loop()
   }
   if (submenu == 1)
   {
+    //Serial.println("Submenu1");
     if (selection)
     {
       switch (menuItem)
       {
       case 0:
         submenu = 0;
+        selection = 0;
         myPID.setGains(Kp, Ki, Kd);
+        EEPROM.put(10, Kp);
+        EEPROM.put(20, Ki);
+        EEPROM.put(30, Kd);
       case 1:
         if (change > 0)
         {
@@ -153,7 +170,7 @@ void loop()
         {
           Kp = constrain(Kp - 0.01, 0, 99);
         }
-        Serial.println(Kp);
+        //Serial.println(Kp);
         lcdWrite();
         break;
       case 2:
@@ -166,7 +183,7 @@ void loop()
           Ki = constrain(Ki - 0.01, 0, 99);
         }
 
-        Serial.println(Ki);
+        //Serial.println(Ki);
         lcdWrite();
         break;
       case 3:
@@ -178,22 +195,23 @@ void loop()
         {
           Kd = constrain(Kd - 0.01, 0, 99);
         }
-        Serial.println(Kd);
+        //Serial.println(Kd);
         lcdWrite();
         break;
       }
     }
-    if (powerOn)
-    {
-      myPID.run();
-      digitalWrite(RELAY_PIN, relayControl);
-      //Serial.println(myPID.getPulseValue());
-    }
-    else
-    {
-      myPID.stop();
-      digitalWrite(RELAY_PIN, LOW);
-    }
+  }
+  if (powerOn)
+  {
+    Serial.println("PowerOn");
+    myPID.run();
+    digitalWrite(RELAY_PIN, relayControl);
+    //Serial.println(myPID.getPulseValue());
+  }
+  else
+  {
+    myPID.stop();
+    digitalWrite(RELAY_PIN, LOW);
   }
   updateTemperature();
 } //void loop
@@ -214,7 +232,7 @@ void lcdWrite()
   case 0:
     //Serial.println("hey");
     lcdSelection(menuItem);
-    }
+
     lcd.setCursor(1, 0);
     lcd.print("Set Temp: ");
     lcd.print(setTemp);
