@@ -26,7 +26,7 @@ const byte PULSEWIDTH = 5000;
 
 //vars
 double Kp = 0; // 0.12
-double Ki = 0; //0.0003
+double Ki = 0; // 0.0003
 double Kd = 0;
 double temperature;
 double setTemp;
@@ -118,12 +118,28 @@ void loop()
     selection = !selection;
     lcdWrite();
   }
+  // Power State and update PID and relay state
+  if (powerOn)
+  {
+    Serial.println("PowerOn");
+    myPID.run();
+    digitalWrite(RELAY_PIN, relayControl);
+    //Serial.println(myPID.getPulseValue());
+  }
+  else
+  {
+    myPID.stop();
+    digitalWrite(RELAY_PIN, LOW);
+  }
+  updateTemperature();
+
+  // Select Screen ("Submenus")
+
   if (submenu == 0)
   {
     //Serial.println("Submenu0");
     if (selection)
     {
-      //Serial.println(change);
       switch (menuItem)
       {
       case 0:
@@ -195,36 +211,27 @@ void loop()
         {
           Kd = constrain(Kd - 0.01, 0, 99);
         }
-        //Serial.println(Kd);
         lcdWrite();
         break;
       }
     }
   }
-  if (powerOn)
-  {
-    Serial.println("PowerOn");
-    myPID.run();
-    digitalWrite(RELAY_PIN, relayControl);
-    //Serial.println(myPID.getPulseValue());
-  }
-  else
-  {
-    myPID.stop();
-    digitalWrite(RELAY_PIN, LOW);
-  }
-  updateTemperature();
 } //void loop
 
+// Handles LCD Writes
 void lcdWrite()
 {
+  //Lock up on Error
   if (error)
   {
     lcd.clear();
     lcd.print("ERROR");
     lcd.setCursor(0, 1);
     lcd.print("Please Reset");
-    return;
+    while (1)
+    {
+      // Infinite loop
+    }
   }
   //Serial.println(submenu);
   switch (submenu)
@@ -238,6 +245,7 @@ void lcdWrite()
     lcd.print(setTemp);
     if (setTemp <= 9)
     {
+      //Padding
       lcd.print(" ");
     }
     lcd.setCursor(1, 1);
@@ -272,6 +280,8 @@ void lcdWrite()
     break;
   }
 }
+
+// Arrow placement on LCD screen function
 void lcdSelection(uint8_t menuItem)
 {
   switch (menuItem)
