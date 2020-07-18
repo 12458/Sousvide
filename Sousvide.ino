@@ -8,6 +8,8 @@
   Kd: <>
 */
 
+#include <Arduino.h>
+#include <HardwareSerial.h>
 #include <SPI.h>
 #include "Adafruit_MAX31855.h"
 #include <AutoPID.h>
@@ -15,6 +17,7 @@
 #include <Encoder.h>
 #include <Bounce2.h>
 #include <EEPROM.h>
+#include <Arduino_FreeRTOS.h>
 
 // Constant Definitions
 const byte MAXDO = 8;
@@ -22,9 +25,13 @@ const byte MAXCS = 7;
 const byte MAXCLK = 6;
 const byte BUTTON_PIN = 11;
 const byte RELAY_PIN = 12;
-const byte PULSEWIDTH = 5000;
+const int PULSEWIDTH = 5000;
+const byte ENC_PIN1 = 2;
+const byte ENC_PIN2 = 3;
+const int TEMP_READ_DELAY = 500;
+const byte DANGER_TEMPERATURE = 90;
 
-//vars
+// Global Variables
 double Kp = 0; // 0.12
 double Ki = 0; // 0.0003
 double Kd = 0;
@@ -40,27 +47,17 @@ uint8_t submenu = 0;
 int8_t change;
 
 Bounce debouncer = Bounce();
-Encoder myEnc(2, 3);
+Encoder myEnc(ENC_PIN1, ENC_PIN2);
 Adafruit_MAX31855 thermocouple(MAXCLK, MAXCS, MAXDO);                              //MAX31855
 AutoPIDRelay myPID(&temperature, &setTemp, &relayControl, PULSEWIDTH, Kp, Ki, Kd); //AutoPID setup
 LiquidCrystal_I2C lcd(0x3F, 20, 4);                                                // I2C LCD setup
-#define TEMP_READ_DELAY 500
 
-//updateTemperature function
-void updateTemperature()
-{
-  if ((millis() - lastTempUpdate) > TEMP_READ_DELAY)
-  {
-    temperature = thermocouple.readCelsius();
-    if (isnan(temperature))
-    {
-      error = true;
-    }
-    lastTempUpdate = millis();
-    Serial.println(temperature);
-    lcdWrite();
-  }
-}
+// Define RTOS Tasks Prototypes
+void TaskUpdateTemperature(void *pvParameters);
+void TaskLCDUpdate(void *pvParameters);
+void TaskEncoderRead(void *pvParameters);
+void TaskPIDUpdate(void *pvParameters);
+void TaskDebouncer(void *pvParameters);
 
 //SETUP
 void setup()
@@ -77,6 +74,7 @@ void setup()
   lcd.backlight();
   lcd.home();
   Serial.begin(115200);
+
   //set up temperature sensors and relay output
   myPID.setBangBang(4);
   myPID.setTimeStep(4000);
@@ -88,53 +86,54 @@ void setup()
   lcdWrite();
   debouncer.attach(BUTTON_PIN);
   debouncer.interval(10); // interval in ms
-}
 
-void loop()
+  //////////////
+  //RTOS Setup//
+  //////////////
+  xTaskCreate(
+      TaskUpdateTemperature, "UpdateTemperature", 128,
+      NULL, 3,
+      NULL);
+  xTaskCreate(
+      TaskLCDUpdate, "LCDUpdate", 128,
+      NULL, 1,
+      NULL);
+  xTaskCreate(
+      TaskEncoderRead, "EncoderRead", 128,
+      NULL, 2,
+      NULL);
+  xTaskCreate(
+      TaskPIDUpdate, "PIDUpdate", 128,
+      NULL, 4,
+      NULL);
+  xTaskCreate(
+      TaskDebouncer, "Debouncer", 128,
+      NULL, 2,
+      NULL);
+  //////////////
+}
+void TaskUpdateTemperature(void *pvParameters)
 {
-  if (temperature >= 90)
+  if ((millis() - lastTempUpdate) > TEMP_READ_DELAY)
+  {
+    temperature = thermocouple.readCelsius();
+    if (isnan(temperature))
+    {
+      error = true;
+    }
+    lastTempUpdate = millis();
+    Serial.println(temperature);
+    lcdWrite();
+  }
+  if (temperature >= DANGER_TEMPERATURE)
   {
     error = true;
     lcdWrite();
   }
-  if (error)
-  {
-    powerOn = false;
-  }
-  newPosition = myEnc.read() / 4;
-  change = newPosition - oldPosition;
-  //Serial.println(change);
-  if (selection == false)
-  {
-    menuItem = constrain((menuItem + change), 0, 3);
-    lcdWrite();
-    //Serial.println(menuItem);
-  }
-  //Serial.println(menuItem);
-  oldPosition = newPosition;
-  debouncer.update();
-  if (debouncer.fell())
-  { // Call code if button transitions from HIGH to LOW
-    selection = !selection;
-    lcdWrite();
-  }
-  // Power State and update PID and relay state
-  if (powerOn)
-  {
-    Serial.println("PowerOn");
-    myPID.run();
-    digitalWrite(RELAY_PIN, relayControl);
-    //Serial.println(myPID.getPulseValue());
-  }
-  else
-  {
-    myPID.stop();
-    digitalWrite(RELAY_PIN, LOW);
-  }
-  updateTemperature();
-
+}
+void TaskLCDUpdate(void *pvParameters)
+{
   // Select Screen ("Submenus")
-
   if (submenu == 0)
   {
     //Serial.println("Submenu0");
@@ -165,6 +164,7 @@ void loop()
   }
   if (submenu == 1)
   {
+
     //Serial.println("Submenu1");
     if (selection)
     {
@@ -216,8 +216,49 @@ void loop()
       }
     }
   }
-} //void loop
+}
+void TaskDebounce(void *pvParameters)
+{
+  oldPosition = newPosition;
+  debouncer.update();
+  if (debouncer.fell())
+  { // Call code if button transitions from HIGH to LOW
+    selection = !selection;
+    lcdWrite();
+  }
+}
+void TaskEncoderRead(void *pvParameters)
+{
+  newPosition = myEnc.read() / 4;
+  change = newPosition - oldPosition;
+  if (selection == false)
+  {
+    menuItem = constrain((menuItem + change), 0, 3);
+    lcdWrite();
+  }
+}
+void TaskPIDUpdate(void *pvParameters)
+{
+  if (error)
+  {
+    powerOn = false;
+  }
+  // Power State and update PID and relay state
+  if (powerOn)
+  {
+    myPID.run();
+    digitalWrite(RELAY_PIN, relayControl);
+  }
+  else
+  {
+    myPID.stop();
+    digitalWrite(RELAY_PIN, LOW);
+  }
+}
 
+void loop()
+{
+}
 // Handles LCD Writes
 void lcdWrite()
 {
@@ -230,14 +271,11 @@ void lcdWrite()
     lcd.print("Please Reset");
     while (1)
     {
-      // Infinite loop
     }
   }
-  //Serial.println(submenu);
   switch (submenu)
   {
   case 0:
-    //Serial.println("hey");
     lcdSelection(menuItem);
 
     lcd.setCursor(1, 0);
