@@ -30,6 +30,7 @@ const byte ENC_PIN1 = 2;
 const byte ENC_PIN2 = 3;
 const int TEMP_READ_DELAY = 500;
 const byte DANGER_TEMPERATURE = 90;
+const int DEFAULT_TEMPERATURE = 32;
 
 // Global Variables
 double Kp = 0; // 0.12
@@ -42,9 +43,9 @@ bool selection = false;
 unsigned long lastTempUpdate;
 long oldPosition = 0;
 long newPosition;
-uint8_t menuItem = 0;
-uint8_t submenu = 0;
-int8_t change;
+byte menuItem = 0;
+byte submenu = 0;
+int change;
 
 Bounce debouncer = Bounce();
 Encoder myEnc(ENC_PIN1, ENC_PIN2);
@@ -61,15 +62,22 @@ void TaskDebouncer(void *pvParameters);
 
 //SETUP
 void setup()
-{ /*
-  EEPROM.put(10, Kp);
-  EEPROM.put(20, Ki);
-  EEPROM.put(30, Kd);
-  */
+{
+    /* for (int i = 0; i < EEPROM.length(); i++)
+    {
+        EEPROM.write(i, 0);
+    }
+
+    EEPROM.put(10, Kp);
+    EEPROM.put(20, Ki);
+    EEPROM.put(30, Kd); */
+
+    // EEPROM has a size of 1024 bytes on Arduino Nano
+
     EEPROM.get(10, Kp);
     EEPROM.get(20, Ki);
     EEPROM.get(30, Kd);
-    setTemp = 32;
+    setTemp = DEFAULT_TEMPERATURE;
     lcd.init(); // initialize the lcd
     lcd.backlight();
     lcd.home();
@@ -136,14 +144,12 @@ void TaskLCDUpdate(void *pvParameters)
     // Select Screen ("Submenus")
     if (submenu == 0)
     {
-        //Serial.println("Submenu0");
         if (selection)
         {
             switch (menuItem)
             {
             case 0:
                 setTemp = constrain((setTemp + change), 0, 90);
-                //Serial.println(setTemp);
                 lcdWrite();
                 break;
             case 1:
@@ -164,8 +170,6 @@ void TaskLCDUpdate(void *pvParameters)
     }
     if (submenu == 1)
     {
-
-        //Serial.println("Submenu1");
         if (selection)
         {
             switch (menuItem)
@@ -186,7 +190,6 @@ void TaskLCDUpdate(void *pvParameters)
                 {
                     Kp = constrain(Kp - 0.01, 0, 99);
                 }
-                //Serial.println(Kp);
                 lcdWrite();
                 break;
             case 2:
@@ -198,8 +201,6 @@ void TaskLCDUpdate(void *pvParameters)
                 {
                     Ki = constrain(Ki - 0.01, 0, 99);
                 }
-
-                //Serial.println(Ki);
                 lcdWrite();
                 break;
             case 3:
@@ -222,7 +223,8 @@ void TaskDebounce(void *pvParameters)
     oldPosition = newPosition;
     debouncer.update();
     if (debouncer.fell())
-    { // Call code if button transitions from HIGH to LOW
+    {
+        // Call code if button transitions from HIGH to LOW
         selection = !selection;
         lcdWrite();
     }
@@ -320,7 +322,7 @@ void lcdWrite()
 }
 
 // Arrow placement on LCD screen function
-void lcdSelection(uint8_t menuItem)
+void lcdSelection(byte menuItem)
 {
     switch (menuItem)
     {
