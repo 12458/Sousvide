@@ -22,12 +22,17 @@
                 "C:/Users/12458/Documents/Arduino/libraries/Encoder",
                 "C:\\Users\\12458\\AppData\\Local\\Arduino15\\packages\\arduino\\hardware\\avr\\1.8.3\\**",
                 "C:\\Users\\12458\\AppData\\Local\\Arduino15\\packages\\arduino\\tools\\**",
-                "C:\\Users\\12458\\Documents\\Arduino\\libraries\\FreeRTOS\\src"
+                "C:\\Users\\12458\\Documents\\Arduino\\libraries\\FreeRTOS\\src",
+                "C:\\Users\\12458\\Documents\\Arduino\\libraries\\**"
             ],
             "defines": [
                 "_DEBUG",
                 "UNICODE",
-                "_UNICODE"
+                "_UNICODE",
+                "USBCON",
+                "UBRRH",
+                "portTICK_PERIOD_MS",
+                "portMAX_DELAY "
             ],
             "cStandard": "c11",
             "intelliSenseMode": "gcc-x64",

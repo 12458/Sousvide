@@ -18,6 +18,8 @@
 #include <Bounce2.h>
 #include <EEPROM.h>
 #include <Arduino_FreeRTOS.h>
+#include <queue.h>
+#include <HardwareSerial.h>
 
 // Constant Definitions
 const byte MAXDO = 8;
@@ -25,10 +27,15 @@ const byte MAXCS = 7;
 const byte MAXCLK = 6;
 const byte BUTTON_PIN = 11;
 const byte RELAY_PIN = 12;
-const int PULSEWIDTH = 5000;
+const int PULSEWIDTH = 5000; // pulseWidth is the PWM pulse witdh in milliseconds
 const byte ENC_PIN1 = 2;
 const byte ENC_PIN2 = 3;
-const int TEMP_READ_DELAY = 500;
+const int TEMP_READ_DELAY = 500 / portTICK_PERIOD_MS;
+const int LCD_DELAY = 50 / portTICK_PERIOD_MS;
+const int ROTARY_DELAY = 10 / portTICK_PERIOD_MS;
+const int PID_DELAY = 500 / portTICK_PERIOD_MS;
+const int ERROR_DELAY = 500 / portTICK_PERIOD_MS;
+const int DEBOUNCE_DELAY = 10 / portTICK_PERIOD_MS;
 const byte DANGER_TEMPERATURE = 90;
 const int DEFAULT_TEMPERATURE = 32;
 
@@ -36,16 +43,27 @@ const int DEFAULT_TEMPERATURE = 32;
 double Kp = 0; // 0.12
 double Ki = 0; // 0.0003
 double Kd = 0;
-double temperature;
-double setTemp;
-bool relayControl, powerOn, error;
-bool selection = false;
-unsigned long lastTempUpdate;
-long oldPosition = 0;
-long newPosition;
-byte menuItem = 0;
-byte submenu = 0;
-int change;
+double setTemp, temperature;
+bool relayControl;
+
+//bool error;
+//bool selection = false;
+// long oldPosition = 0;
+// long newPosition = 0;
+// byte menuItem = 0;
+// byte submenu = 0;
+// int change = 0;
+struct Data
+{
+    bool error;
+    bool selection;
+    bool powerOn;
+    byte menuItem;
+    byte submenu;
+    int change;
+};
+
+QueueHandle_t Qdata; // Data
 
 Bounce debouncer = Bounce();
 Encoder myEnc(ENC_PIN1, ENC_PIN2);
@@ -63,6 +81,10 @@ void TaskDebouncer(void *pvParameters);
 //SETUP
 void setup()
 {
+    struct Data data = {false, false, false, 0, 0, 0};
+    Qdata = xQueueCreate(1, sizeof(Data));
+    xQueueOverwrite(Qdata, &data);
+
     /* for (int i = 0; i < EEPROM.length(); i++)
     {
         EEPROM.write(i, 0);
@@ -90,14 +112,18 @@ void setup()
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     digitalWrite(RELAY_PIN, LOW);
     delay(500);
-    powerOn = false;
-    lcdWrite();
+
+    lcdWrite(data);
     debouncer.attach(BUTTON_PIN);
     debouncer.interval(10); // interval in ms
 
     //////////////
     //RTOS Setup//
     //////////////
+    // TaskUpdateTemperature Priority 3
+    // TaskLCDUpdate Priority 1
+    // TaskPIDUpdate Priority 4
+    // TaskDebouncer Priority 2
     xTaskCreate(
         TaskUpdateTemperature, "UpdateTemperature", 128,
         NULL, 3,
@@ -119,153 +145,185 @@ void setup()
         NULL, 2,
         NULL);
     //////////////
+
+    vTaskStartScheduler();
 }
 void TaskUpdateTemperature(void *pvParameters)
 {
-    if ((millis() - lastTempUpdate) > TEMP_READ_DELAY)
+    while (1)
     {
         temperature = thermocouple.readCelsius();
         if (isnan(temperature))
         {
-            error = true;
+            struct Data data;
+            xQueuePeek(Qdata, &data, portMAX_DELAY);
+            data.error = true;
+            xQueueOverwrite(Qdata, &data);
         }
-        lastTempUpdate = millis();
-        Serial.println(temperature);
-        lcdWrite();
-    }
-    if (temperature >= DANGER_TEMPERATURE)
-    {
-        error = true;
-        lcdWrite();
+        if (temperature >= DANGER_TEMPERATURE)
+        {
+            struct Data data;
+            xQueuePeek(Qdata, &data, portMAX_DELAY);
+            data.error = true;
+            xQueueOverwrite(Qdata, &data);
+        }
+        vTaskDelay(TEMP_READ_DELAY);
     }
 }
 void TaskLCDUpdate(void *pvParameters)
 {
-    // Select Screen ("Submenus")
-    if (submenu == 0)
+    bool changed = false;
+    while (1)
     {
-        if (selection)
+        // Select Screen ("Submenus")
+        struct Data data;
+        xQueuePeek(Qdata, &data, portMAX_DELAY);
+        if (data.submenu == 0)
         {
-            switch (menuItem)
+            if (data.selection)
             {
-            case 0:
-                setTemp = constrain((setTemp + change), 0, 90);
-                lcdWrite();
-                break;
-            case 1:
-                break;
-            case 2:
-                submenu = 1;
-                lcd.clear();
-                selection = false;
-                menuItem = 0;
-                break;
-            case 3:
-                powerOn = !powerOn;
-                lcdWrite();
-                selection = false;
-                break;
+                switch (data.menuItem)
+                {
+                case 0:
+                    setTemp = constrain((setTemp + data.change), 0, 90);
+                    break;
+                case 1:
+                    break;
+                case 2:
+                    data.submenu = 1;
+                    data.selection = false;
+                    data.menuItem = 0;
+                    changed = true;
+                    break;
+                case 3:
+                    data.powerOn = !data.powerOn;
+                    data.selection = false;
+                    changed = true;
+                    break;
+                }
             }
         }
-    }
-    if (submenu == 1)
-    {
-        if (selection)
+        else if (data.submenu == 1)
         {
-            switch (menuItem)
+            if (data.selection)
             {
-            case 0:
-                submenu = 0;
-                selection = 0;
-                myPID.setGains(Kp, Ki, Kd);
-                EEPROM.put(10, Kp);
-                EEPROM.put(20, Ki);
-                EEPROM.put(30, Kd);
-            case 1:
-                if (change > 0)
+                switch (data.menuItem)
                 {
-                    Kp = constrain(Kp + 0.01, 0, 99);
+                case 0:
+                    data.submenu = 0;
+                    data.selection = 0;
+                    myPID.setGains(Kp, Ki, Kd);
+                    EEPROM.put(10, Kp);
+                    EEPROM.put(20, Ki);
+                    EEPROM.put(30, Kd);
+                    changed = true;
+                case 1:
+                    if (data.change > 0)
+                    {
+                        Kp = constrain(Kp + 0.01, 0, 99);
+                        changed = true;
+                    }
+                    else if (data.change < 0)
+                    {
+                        Kp = constrain(Kp - 0.01, 0, 99);
+                        changed = true;
+                    }
+                    break;
+                case 2:
+                    if (data.change > 0)
+                    {
+                        Ki = constrain(Ki + 0.01, 0, 99);
+                        changed = true;
+                    }
+                    else if (data.change < 0)
+                    {
+                        Ki = constrain(Ki - 0.01, 0, 99);
+                        changed = true;
+                    }
+                    break;
+                case 3:
+                    if (data.change > 0)
+                    {
+                        Kd = constrain(Kd + 0.01, 0, 99);
+                        changed = true;
+                    }
+                    else if (data.change < 0)
+                    {
+                        Kd = constrain(Kd - 0.01, 0, 99);
+                        changed = true;
+                    }
+                    break;
                 }
-                else if (change < 0)
-                {
-                    Kp = constrain(Kp - 0.01, 0, 99);
-                }
-                lcdWrite();
-                break;
-            case 2:
-                if (change > 0)
-                {
-                    Ki = constrain(Ki + 0.01, 0, 99);
-                }
-                else if (change < 0)
-                {
-                    Ki = constrain(Ki - 0.01, 0, 99);
-                }
-                lcdWrite();
-                break;
-            case 3:
-                if (change > 0)
-                {
-                    Kd = constrain(Kd + 0.01, 0, 99);
-                }
-                else if (change < 0)
-                {
-                    Kd = constrain(Kd - 0.01, 0, 99);
-                }
-                lcdWrite();
-                break;
             }
         }
+        if (changed)
+        {
+            xQueueOverwrite(Qdata, &data);
+            lcdWrite(data);
+        }
+        vTaskDelay(LCD_DELAY);
     }
 }
-void TaskDebounce(void *pvParameters)
+void TaskDebouncer(void *pvParameters)
 {
-    oldPosition = newPosition;
-    debouncer.update();
-    if (debouncer.fell())
+
+    while (1)
     {
-        // Call code if button transitions from HIGH to LOW
-        selection = !selection;
-        lcdWrite();
+        debouncer.update();
+        if (debouncer.fell())
+        {
+            // Call code if button transitions from HIGH to LOW
+            struct Data data;
+            xQueuePeek(Qdata, &data, portMAX_DELAY);
+            data.selection = !data.selection;
+            xQueueOverwrite(Qdata, &data);
+        }
+        vTaskDelay(DEBOUNCE_DELAY);
     }
 }
 void TaskEncoderRead(void *pvParameters)
 {
-    newPosition = myEnc.read() / 4;
-    change = newPosition - oldPosition;
-    if (selection == false)
+    long oldPosition;
+    while (1)
     {
-        menuItem = constrain((menuItem + change), 0, 3);
-        lcdWrite();
+        struct Data data;
+        xQueuePeek(Qdata, &data, portMAX_DELAY);
+        long newPosition = myEnc.read() / 4;
+        data.change = newPosition - oldPosition;
+        if (data.selection == false)
+        {
+            data.menuItem = constrain((data.menuItem + data.change), 0, 3);
+        }
+        oldPosition = newPosition;
+        xQueueOverwrite(Qdata, &data);
+        vTaskDelay(ROTARY_DELAY);
     }
 }
 void TaskPIDUpdate(void *pvParameters)
 {
-    if (error)
+    while (1)
     {
-        powerOn = false;
+        struct Data data;
+        xQueuePeek(Qdata, &data, portMAX_DELAY);
+        // Power State and update PID and relay state
+        if (!data.error)
+        {
+            myPID.run();
+            digitalWrite(RELAY_PIN, relayControl);
+        }
+        else
+        {
+            myPID.stop();
+            digitalWrite(RELAY_PIN, LOW);
+        }
+        vTaskDelay(PID_DELAY);
     }
-    // Power State and update PID and relay state
-    if (powerOn)
-    {
-        myPID.run();
-        digitalWrite(RELAY_PIN, relayControl);
-    }
-    else
-    {
-        myPID.stop();
-        digitalWrite(RELAY_PIN, LOW);
-    }
-}
-
-void loop()
-{
 }
 // Handles LCD Writes
-void lcdWrite()
+void lcdWrite(Data data)
 {
     //Lock up on Error
-    if (error)
+    if (data.error)
     {
         lcd.clear();
         lcd.print("ERROR");
@@ -275,10 +333,10 @@ void lcdWrite()
         {
         }
     }
-    switch (submenu)
+    switch (data.submenu)
     {
     case 0:
-        lcdSelection(menuItem);
+        lcdSelection(data.menuItem);
 
         lcd.setCursor(1, 0);
         lcd.print("Set Temp: ");
@@ -295,7 +353,7 @@ void lcdWrite()
         lcd.print("Settings");
         lcd.setCursor(1, 3);
         lcd.print("State: ");
-        if (powerOn)
+        if (data.powerOn)
         {
             lcd.print("ON ");
         }
@@ -305,7 +363,8 @@ void lcdWrite()
         }
         break;
     case 1:
-        lcdSelection(menuItem);
+        lcdSelection(data.menuItem);
+        lcd.clear();
         lcd.setCursor(1, 0);
         lcd.print("Back");
         lcd.setCursor(1, 1);
@@ -367,4 +426,8 @@ void lcdSelection(byte menuItem)
         lcd.print(">");
         break;
     }
+}
+
+void loop()
+{
 }
