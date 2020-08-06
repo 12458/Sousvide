@@ -14,7 +14,7 @@ A previously made sousvide cooker has unacceptable temperature fluctuations
 ## Objective
 Make a sousvide cooker with adjustable temperature control
 ## Solution
-Using a microcontrller such as an Arduino with PID, stable temperature control can be achieved.
+Using a microcontroller such as an Arduino with PID, stable temperature control can be achieved.
 ## Schematic
 ![Schematic](/docs/schematic.png)
 ## Photos
